@@ -77,6 +77,3 @@ schedule.every().saturday.at("12:00").do(asincio.run, send_file())
 
 if __name__ == "__main__":
     asyncio.run(main())
-    while True:
-        schedule.run_pending()
-        time.sleep(3600)
