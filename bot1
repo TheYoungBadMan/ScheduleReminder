@@ -1,0 +1,151 @@
+import asyncio
+import logging
+import os
+import sqlite3
+from dotenv import load_dotenv
+from aiogram import Bot, Dispatcher, types
+from aiogram.fsm.context import FSMContext
+from aiogram.filters import Command
+from aiogram.filters.state import State, StatesGroup
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+load_dotenv()
+
+scheduler = AsyncIOScheduler(timezone="Asia/Almaty")
+
+logging.basicConfig(level=logging.INFO)
+bot = Bot(token=os.getenv("BOT_TOKEN"))
+dp = Dispatcher()
+
+# открытие conn
+
+conn = sqlite3.connect("students.db")
+
+
+# Определение состояний
+class RegistrationState(StatesGroup):
+    course = State()
+    group = State()
+
+
+# Хэндлер на команду /start
+@dp.message(Command("start"))
+async def cmd_start(message: types.Message, state: FSMContext):
+    user_id, course, group = await get_user(str(message.from_user.id))
+    if user_id:
+        await message.answer("Вы уже зарегистрированы!")
+    else:
+        await message.answer("Пройдите регистрацию")
+        # Выбор курса
+        kb = types.ReplyKeyboardMarkup(keyboard=[
+            [
+                types.KeyboardButton(text="1")
+            ],
+            [
+                types.KeyboardButton(text="2")
+            ],
+            [
+                types.KeyboardButton(text="3")
+            ],
+            [
+                types.KeyboardButton(text="4")
+            ],
+        ])
+        await message.answer("Выберите свой курс", reply_markup=kb)
+
+        await state.set_state(RegistrationState.course)
+
+
+# Хэндлер на выбор группы
+@dp.message(RegistrationState.course)
+async def choose_course(message: types.Message, state: FSMContext):
+    # Запоминание курса
+    course = int(message.text)
+
+    await state.update_data(course=course)
+
+    # Предложение клавиатуры для выбора группы
+    kb = types.ReplyKeyboardMarkup(keyboard=[
+        [
+            types.KeyboardButton(text="ВМ")
+        ],
+        [
+            types.KeyboardButton(text="ММ")
+        ],
+        [
+            types.KeyboardButton(text="Э")
+        ],
+        [
+            types.KeyboardButton(text="ФФ")
+        ],
+        [
+            types.KeyboardButton(text="ГГ")
+        ],
+    ])
+    await message.answer("Выберите свою группу", reply_markup=kb)
+
+    await state.set_state(RegistrationState.group)
+
+
+# Хэндлер на выбор группы
+@dp.message(RegistrationState.group)
+async def choose_group(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    course = data["course"]
+    group = message.text
+
+    await add_user(str(message.from_user.id), course, group)
+    await message.answer(f"Поздравляю! Вы успешно прошли регистрацию.\n"
+                         f"Ваши данные:\n"
+                         f"Course - {course}\n"
+                         f"Group - {group}",
+                         reply_markup=types.ReplyKeyboardRemove(),
+                         )
+
+
+# Тест отправка файлов
+@dp.message(Command("test"))
+async def test(message: types.Message):
+    await send_file()
+
+
+# Проверка на наличие пользователя
+async def get_user(user_id: str):
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+    return cur.fetchone()
+
+
+async def add_user(user_id: str, course: int, group: str):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO users
+            (user_id, course, group_name)
+            VALUES (?, ?, ?) 
+    """, (user_id, course, group))
+    conn.commit()
+    cur.close()
+
+
+async def send_file():
+    cur = conn.cursor()
+    users = cur.execute("SELECT * FROM users")
+
+    for user_id, course, group in users:
+        file_name = f"schedule/course_{course}/{group}-{course}1.doc"
+        await bot.send_document(user_id, types.FSInputFile(path=file_name))
+
+
+# Запуск процесса поллинга новых апдейтов
+async def main():
+    scheduler.start()
+    await dp.start_polling(bot)
+
+
+# Планирование отправки файла в выбранное время
+scheduler.add_job(send_file, "cron", day_of_week="sat", hour=22, minute=4)
+#поминутная отправка
+#scheduler.add_job(send_file, "interval", minutes=1)
+
+if __name__ == "__main__":
+    asyncio.run(main())
